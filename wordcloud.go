@@ -12,13 +12,8 @@ import (
 	"sync"
 )
 
-type wordCount struct {
-	word  string
-	count int
-}
-
 type word2D struct {
-	wordCount
+	word        string
 	x           float64
 	y           float64
 	height      float64
@@ -27,8 +22,8 @@ type word2D struct {
 
 // Wordcloud object. Create one with NewWordcloud and use Draw() to get the image
 type Wordcloud struct {
-	wordList        map[string]int
-	sortedWordList  []wordCount
+	wordList        []string
+	bigWords	[]string
 	grid            *spatialHashMap
 	dc              *gg.Context
 	overlapCount    int
@@ -141,19 +136,11 @@ func Debug() Option {
 }
 
 // Initialize a wordcloud based on a map of word frequency.
-func NewWordcloud(wordList map[string]int, options ...Option) *Wordcloud {
+func NewWordcloud(wordList []string, bigWords []string, options ...Option) *Wordcloud {
 	opts := defaultOptions
 	for _, opt := range options {
 		opt(&opts)
 	}
-
-	sortedWordList := make([]wordCount, 0, len(wordList))
-	for word, count := range wordList {
-		sortedWordList = append(sortedWordList, wordCount{word: word, count: count})
-	}
-	sort.Slice(sortedWordList, func(i, j int) bool {
-		return sortedWordList[i].count > sortedWordList[j].count
-	})
 
 	dc := gg.NewContext(opts.Width, opts.Height)
 	dc.SetColor(opts.BackgroundColor)
@@ -181,7 +168,7 @@ func NewWordcloud(wordList map[string]int, options ...Option) *Wordcloud {
 
 	return &Wordcloud{
 		wordList:        wordList,
-		sortedWordList:  sortedWordList,
+		bigWords:        bigWords,
 		grid:            grid,
 		dc:              dc,
 		words2D:         make([]*word2D, 0),
@@ -229,17 +216,24 @@ func (w *Wordcloud) setFont(size float64) {
 	w.dc.SetFontFace(w.fonts[size])
 }
 
-func (w *Wordcloud) Place(wc wordCount) bool {
+func (w *Wordcloud) Place(word string, bigWord bool) bool {
 	c := w.opts.Colors[rand.Intn(len(w.opts.Colors))]
 	w.dc.SetColor(c)
 
-	size := float64(w.opts.FontMaxSize) * (float64(wc.count) / float64(w.sortedWordList[0].count))
+	minSize := float64(w.opts.FontMinSize)
+	
+	if bigWord {
+		minSize = minSize * 0.75
+	}
+	
+	size := minSize + rand.Float64() * (float64(w.opts.FontMaxSize) - minSize)
 
 	if size < float64(w.opts.FontMinSize) {
 		size = float64(w.opts.FontMinSize)
 	}
+	
 	w.setFont(size)
-	width, height := w.dc.MeasureString(wc.word)
+	width, height := w.dc.MeasureString(word)
 
 	width += 5
 	height += 5
@@ -247,7 +241,7 @@ func (w *Wordcloud) Place(wc wordCount) bool {
 	if !space {
 		return false
 	}
-	w.dc.DrawStringAnchored(wc.word, x, y, 0.5, 0.5)
+	w.dc.DrawStringAnchored(word, x, y, 0.5, 0.5)
 
 	box := &Box{
 		y + height/2 + 0.3*height,
@@ -273,8 +267,19 @@ func (w *Wordcloud) Place(wc wordCount) bool {
 // Draw tries to place words one by one, starting with the ones with the highest counts
 func (w *Wordcloud) Draw() image.Image {
 	consecutiveMisses := 0
-	for _, wc := range w.sortedWordList {
-		success := w.Place(wc)
+	for _, word := range w.bigWords {
+		success := w.Place(word, true)
+		if !success {
+			consecutiveMisses++
+			if consecutiveMisses > 10 {
+				return w.dc.Image()
+			}
+			continue
+		}
+		consecutiveMisses = 0
+	}
+	for _, word := range w.wordList {
+		success := w.Place(word, false)
 		if !success {
 			consecutiveMisses++
 			if consecutiveMisses > 10 {
